@@ -1,0 +1,113 @@
+version: '3.3'
+
+volumes:
+  fbdata: {}
+
+services:
+
+  server:
+    build: ./server
+    container_name: 'server'
+    expose:
+      - "8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./server:/server
+    env_file: 
+      - .env
+    restart: always
+    links:
+      - db
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.0
+    container_name: elasticsearch
+    environment:
+      - node.name=es01
+      - discovery.seed_hosts=es01
+      - cluster.initial_master_nodes=es01
+      - cluster.name=docker-cluster
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms4096m -Xmx4096m"
+      #- xpack.security.enabled=true
+      #- xpack.security.authc.api_key.enabled=true
+      #- "ELASTICSEARCH_USERNAME=kibana"
+      #- "ELASTICSEARCH_PASSWORD=NewKibanaPassword"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.17.0
+    environment:
+      - "ELASTICSEARCH_HOSTS=http://elasticsearch:9200"
+      #- "ELASTICSEARCH_USERNAME=kibana"
+      #- "ELASTICSEARCH_PASSWORD=NewKibanaPassword"
+    ports:
+      - "5601:5601"
+  filebeat:
+    container_name: filebeat
+    hostname: filebeat
+    user: root
+    image: docker.elastic.co/beats/filebeat:7.4.0
+    volumes:
+      #Mount the filebeat configuration so users can make edit
+      - ./config/filebeat.yml:/usr/share/filebeat/filebeat.yml
+      #Mount the mysql logs into the filebeat container so we can access and and index them using the filebeat mysql module
+      - ./db/logs:/var/log/mysql/
+      #Named volume fsdata. This is used to persist the registry file between restarts, so to avoid data duplication
+      - fbdata:/usr/share/filebeat/data/
+    command: filebeat -strict.perms=false
+    restart: on-failure
+  db:
+    image: mysql:5.7.37
+    container_name: db
+    entrypoint: ""
+    command: bash -c "chown -R mysql:mysql /var/log/mysql && exec /entrypoint.sh mysqld --init-file /docker-entrypoint-initdb.d/init.sql"
+    volumes:
+      - "./db/mysql.conf.d/mysqld.cnf:/etc/mysql/mysql.conf.d/mysqld.cnf"
+      - "./db/data:/var/lib/mysql:rw"
+      - "./db/logs:/var/log/mysql/"
+      - "./init.sql:/docker-entrypoint-initdb.d/init.sql"
+    ports:
+      - 3306:3306
+    restart: always
+    environment:
+      - MYSQL_USER=dbuser
+      - MYSQL_PASSWORD=dbpassword
+      - MYSQL_ROOT_PASSWORD=password
+      - MYSQL_DATABASE=db
+      - MYSQL_ALLOW_EMPTY_PASSWORD=yes
+  mongo:
+    image: mongo:3
+    volumes:
+      - ./db/mongo_data:/data/db
+    ports:
+      - 27017:27017
+  graylog:
+    image: graylog/graylog:4.2
+    volumes:
+      - "./graylog/graylog_journal:/usr/share/graylog/data/journal"
+    environment:
+      # CHANGE ME (must be at least 16 characters)!
+      - GRAYLOG_PASSWORD_SECRET=somepasswordpepper
+      # Password: admin
+      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      - GRAYLOG_HTTP_EXTERNAL_URI=http://graylog:9000/
+      #- GRAYLOG_ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      #- GRAYLOG_ELASTICSEARCH_DISCOVERY_DEFAULT_USER=kibana
+      #- GRAYLOG_ELASTICSEARCH_DISCOVERY_DEFAULT_PASSWORD=NewKibanaPassword
+    ports:
+      # Graylog web interface and REST API
+      - 9000:9000
+      # Syslog TCP
+      - 1514:1514
+      # Syslog UDP
+      - 1514:1514/udp
+      # GELF TCP
+      - 12201:12201
+      # GELF UDP
+      - 12201:12201/udp
